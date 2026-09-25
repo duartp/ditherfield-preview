@@ -22,7 +22,8 @@
   var engine, piece, f = 0, t0 = 0, playing = true, live = new DF.Live(), rafTimes = [], lastDraw = 0;
   var tab = store.get('tab', 'play'), sectionOf = store.get('sections', {}), panelOpen = true, saveTimer = 0;
   var hot = {}, dirty = false, lost = false, wantSound = false;
-  var GEOMETRY = { grid: 1, aspect: 1, sortAng: 1, bars: 1, step: 1, hitLen: 1, procOut: 1, procPass: 1 };
+  var GEOMETRY = { grid: 1, aspect: 1, sortAng: 1, bars: 1, step: 1, hitLen: 1, procOut: 1, procPass: 1, hitHold: 1, hitRise: 1, hitsBetween: 1 };
+  var wordSel = -1;                                    // the words editor's selected slot
 
   function vib(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { } }
   function toast(msg) { var t = $('toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(function () { t.classList.remove('on'); }, 2000); }
@@ -80,6 +81,7 @@
   var ICON = {
     play: 'M8 5v14l11-7z',
     source: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18m0 4a5 5 0 1 0 0 10a5 5 0 1 0 0-10m0 4a1 1 0 1 0 0 2a1 1 0 1 0 0-2',
+    type: 'M5 6V4h14v2M12 4v16M9 20h6',
     sort: 'M4 6h16M4 10h12M4 14h8M4 18h4',
     colour: 'M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z',
     sound: 'M3 12h2l2-6 3 12 3-9 2 5 2-2h4',
@@ -96,14 +98,24 @@
       { s: 'RINGS', w: [{ t: 'toggles', items: [['rgOn', 'rings on']] }, { t: 'fader', k: 'rgX' }, { t: 'fader', k: 'rgY' }, { t: 'fader', k: 'rgPeriod' },
         { t: 'fader', k: 'rgSpeed' }, { t: 'fader', k: 'rgCount' }, { t: 'fader', k: 'rgOrbit' }, { t: 'fader', k: 'rgOrbSpd' }, { t: 'fader', k: 'rgGain' },
         { t: 'fader', k: 'rgCut' }, { t: 'seg', k: 'rgMode' }, { t: 'xy', x: 'rgX', y: 'rgY', l: 'centre', invY: true }] },
-      { s: 'TYPE', w: [{ t: 'toggles', items: [['tyOn', 'type on']] }, { t: 'text' }, { t: 'chips', k: 'tyFont' }, { t: 'fader', k: 'tySize' },
-        { t: 'fader', k: 'tyTrack' }, { t: 'fader', k: 'tyX' }, { t: 'fader', k: 'tyY' }, { t: 'fader', k: 'tyVal' }, { t: 'seg', k: 'tyMode' }] },
       { s: 'FRAME', w: [{ t: 'fader', k: 'bg' }, { t: 'seg', k: 'aspect' }, { t: 'chips', k: 'grid' }] }] },
+    // TYPE: the words (no typing of | or /), how they move (starters, direction, travel, eases) and when (stagger, hold)
+    { id: 'type', l: 'type', sections: [
+      { s: 'WORDS', w: [{ t: 'toggles', items: [['tyOn', 'type'], ['tyMorph', 'words change']] }, { t: 'words' }, { t: 'morphStart' },
+        { t: 'text', l: 'as text  ( | = next word,  / = new line )' }] },
+      { s: 'MOTION', w: [{ t: 'starters' }, { t: 'seg', k: 'sortMode' }, { t: 'dir4' }, { t: 'fader', k: 'sortAng', l: 'angle' },
+        { t: 'fader', k: 'sortMax', l: 'travel (px)' }, { t: 'seg', k: 'openHow', dim: 'hits' }, { t: 'chips', k: 'easeOut', l: 'going out', dim: 'ease' },
+        { t: 'chips', k: 'easeBack', l: 'coming home', dim: 'ease' }, { t: 'fader', k: 'hitLen' }] },
+      { s: 'TIMING', w: [{ t: 'chips', k: 'stagBy', dim: 'sweep' }, { t: 'fader', k: 'sweepStag', l: 'stagger (%)', dim: 'sweep' }, { t: 'seg', k: 'stagExit', dim: 'sweep' },
+        { t: 'fader', k: 'hitHold' }, { t: 'fader', k: 'hitRise', dim: 'process' }, { t: 'seg', k: 'hitsBetween', dim: 'morph' }, { t: 'steps' }] },
+      { s: 'LOOK', w: [{ t: 'chips', k: 'tyFont' }, { t: 'fader', k: 'tySize' }, { t: 'fader', k: 'tyTrack' }, { t: 'xy', x: 'tyX', y: 'tyY', l: 'position', invY: true },
+        { t: 'fader', k: 'tyVal' }, { t: 'seg', k: 'tyMode' }, { t: 'seg', k: 'tyAlign' }, { t: 'seg', k: 'tyStack' }] }] },
     { id: 'sort', l: 'sort', sections: [
       { s: 'MODE', w: [{ t: 'seg', k: 'sortMode' }, { t: 'fader', k: 'sortAng' }, { t: 'seg', k: 'sortTint' }] },
       { s: 'WINDOW', w: [{ t: 'fader', k: 'beatOpen' }, { t: 'fader', k: 'sortLo' }, { t: 'fader', k: 'sortHi' }, { t: 'fader', k: 'sortMax' }, { t: 'fader', k: 'sortAmt' }] },
       { s: 'BANDS', w: [{ t: 'fader', k: 'sortBands' }, { t: 'fader', k: 'sortSpread' }] },
-      { s: 'MOTION', w: [{ t: 'fader', k: 'procPass' }, { t: 'fader', k: 'procOut' }, { t: 'fader', k: 'hitLen' }, { t: 'fader', k: 'sweepStag' }] }] },
+      { s: 'MOTION', w: [{ t: 'seg', k: 'openHow', dim: 'hits' }, { t: 'chips', k: 'easeOut', dim: 'ease' }, { t: 'chips', k: 'easeBack', dim: 'ease' }, { t: 'chips', k: 'stagBy', dim: 'sweep' },
+        { t: 'fader', k: 'hitHold' }, { t: 'fader', k: 'hitRise', dim: 'process' }, { t: 'fader', k: 'procPass' }, { t: 'fader', k: 'procOut' }, { t: 'fader', k: 'hitLen' }, { t: 'fader', k: 'sweepStag' }] }] },
     { id: 'colour', l: 'colour', sections: [
       { s: 'PALETTE', w: [{ t: 'palette', which: 'A' }, { t: 'palette', which: 'B' }, { t: 'layers' }] },
       { s: 'DITHER', w: [{ t: 'seg', k: 'dither' }, { t: 'seg', k: 'colMode' }, { t: 'fader', k: 'levels' }, { t: 'fader', k: 'spread' }, { t: 'seg', k: 'dithHome' }] },
@@ -140,18 +152,62 @@
     secs.hidden = T.sections.length < 2;
     var body = $('body'); body.innerHTML = '';
     var S = T.sections.filter(function (s) { return s.s === cur; })[0];
-    S.w.forEach(function (w) { var node = WIDGETS[w.t](w); if (node) body.appendChild(node); });
+    S.w.forEach(function (w) { var node = WIDGETS[w.t](w); if (!node) return; body.appendChild(node); if (w.dim) dimmer(node, DIM[w.dim]); });
+  }
+  // when a control does nothing right now, say why (it still works, so it can be set ahead)
+  var DIM = {
+    sweep: { on: ['sortMode'], why: function (v) { return v.sortMode !== 3 ? 'stagger works in sweep' : ''; } },
+    ease: { on: ['openHow', 'sortMode'], soft: true, why: function (v) { return !v.openHow && v.sortMode === 3 ? 'lines pop open one by one: pick "together" to see the ease' : ''; } },
+    process: { on: ['sortMode'], why: function (v) { return v.sortMode === 2 ? 'process keeps half the hit going out' : ''; } },
+    morph: { on: ['tyOn', 'tyMorph'], why: function (v) { return !(v.tyOn && v.tyMorph) ? 'turn on "words change"' : ''; } },
+    hits: { on: ['openHow'], why: function (v, p) { return v.openHow && !(p.seq && p.seq.hits) ? 'needs sort hits (TIMING > steps)' : ''; } }
+  };
+  function dimmer(node, rule) {
+    var note = el('div', 'note why'); node.after(note);
+    function show() { var r = rule.why(piece.v, piece); if (!rule.soft) node.classList.toggle('dimmed', !!r); note.textContent = r || ''; note.hidden = !r; }
+    show(); rule.on.forEach(function (k) { onHot(k, show); });
   }
   function onHot(k, fn) { (hot[k] = hot[k] || []).push(fn); }
+  // motion starters: the words stay (a reveal adds 'nothing' first); colours, fonts and the rest of the piece stay
+  // (an 8 s loop, 3 bars of step 10: the exit, a breath of black, the reveal, then the logo holds for about 4 s)
+  var REVEAL = { tyOn: 1, tyMorph: 1, hitsBetween: 1, stOn: 0, rgOn: 0, bg: 0, tyMode: 0, tyVal: 255, sortMode: 3, sortMax: 540, beatOpen: 100,
+    openHow: 1, sweepStag: 50, stagExit: 0, easeOut: 2, easeBack: 2, hitLen: 12, hitHold: 40, hitRise: 25, bars: 3, step: 10 };
+  var STARTERS = {
+    'logo reveal →': { blank: true, v: { sortAng: 180, stagBy: 1 } },
+    'logo reveal ←': { blank: true, v: { sortAng: 0, stagBy: 2 } },
+    'logo drop ↓': { blank: true, v: { sortAng: 90, stagBy: 3 } },
+    'line cascade': { blank: false, v: { sortAng: 180, stagBy: 3, sweepStag: 70, hitsBetween: 0, bars: 2, step: 15 } },
+    'melt ↓': { melt: true }
+  };
+  function starter(name) {
+    var S = STARTERS[name], v = piece.v, slots = DF.textToWords(piece.text).filter(function (s) { return s.w !== '_'; });
+    if (!slots.length) slots = [{ w: 'LOGO', n: 1 }];
+    clearTimeout(histT); commitHistory();
+    if (S.melt) {
+      var M = { tyOn: 1, tyMorph: 1, stOn: 0, rgOn: 0, bg: 0, tyMode: 0, tyVal: 255, sortMode: 3, beatOpen: 100, sortAng: 270, sortMax: 48, sweepStag: 40,
+        hitLen: 8, openHow: 0, stagBy: 0, stagExit: 0, hitHold: 0, hitRise: 25, hitsBetween: 0, easeOut: 0, easeBack: 0 };
+      Object.keys(M).forEach(function (k) { v[k] = M[k]; });
+    } else {
+      Object.keys(REVEAL).forEach(function (k) { v[k] = REVEAL[k]; });
+      Object.keys(S.v).forEach(function (k) { v[k] = S.v[k]; });
+      // a reveal: nothing, then the words; a single word stays for three parts so the logo holds
+      if (S.blank) slots = [{ w: '_', n: 1 }].concat(slots.length === 1 ? [{ w: slots[0].w, n: 3 }] : slots);
+    }
+    piece.text = DF.wordsToText(slots); piece.mods = {};
+    piece.seq = piece.seq || { hits: 0, notes: [] };
+    if (!piece.seq.hits) piece.seq.hits = 0x1111;
+    var m = DF.morphTimeline(piece); if (m && m.skipped.length) piece.seq.hits |= 0x0101;
+    wordSel = -1; apply(true); render(); vib(8); toast(name);
+  }
   function hasSource() { var v = piece.v; return v.stOn || v.rgOn || (v.tyOn && (piece.text || '').trim()); }
 
   var WIDGETS = {
     // relative fader: drag sideways from where it is (full range = at least 280 px of travel; move the finger 40 px
     // above or below the track for 4x finer steps); vertical swipes scroll; double-tap = seed value; long-press = editor
     fader: function (w) {
-      var P = DF.PARAM[w.k], row = el('div', 'w fader-row'), name = el('span', 'lab', P.l), trk = el('div', 'track'), knob = el('i', 'knob'), fill = el('b', 'fill'), val = el('span', 'val');
+      var P = DF.PARAM[w.k], row = el('div', 'w fader-row'), name = el('span', 'lab', w.l || P.l), trk = el('div', 'track'), knob = el('i', 'knob'), fill = el('b', 'fill'), val = el('span', 'val');
       trk.appendChild(fill); trk.appendChild(knob); row.appendChild(name); row.appendChild(trk); row.appendChild(val);
-      trk.setAttribute('role', 'slider'); trk.setAttribute('aria-label', P.l); trk.tabIndex = 0;
+      trk.setAttribute('role', 'slider'); trk.setAttribute('aria-label', w.l || P.l); trk.tabIndex = 0;
       trk.setAttribute('aria-valuemin', P.min); trk.setAttribute('aria-valuemax', P.max);
       function show() {
         var v = piece.v[w.k], x = (v - P.min) / (P.max - P.min);
@@ -198,14 +254,14 @@
       return row;
     },
     seg: function (w) {
-      var P = DF.PARAM[w.k], box = el('div', 'w'), lab = el('div', 'lab', P.l), seg = el('div', 'seg');
+      var P = DF.PARAM[w.k], box = el('div', 'w'), lab = el('div', 'lab', w.l || P.l), seg = el('div', 'seg');
       box.appendChild(lab); box.appendChild(seg);
       P.opts.forEach(function (o, i) { var b = el('button', '', o); b.type = 'button'; b.onclick = function () { setDial(w.k, i); vib(5); }; seg.appendChild(b); });
       function show() { Array.prototype.forEach.call(seg.children, function (b, i) { b.classList.toggle('on', i === piece.v[w.k]); b.setAttribute('aria-pressed', i === piece.v[w.k]); }); }
       show(); onHot(w.k, show); return box;
     },
     chips: function (w) {
-      var P = DF.PARAM[w.k], box = el('div', 'w'), lab = el('div', 'lab', P.l), row = el('div', 'chips');
+      var P = DF.PARAM[w.k], box = el('div', 'w'), lab = el('div', 'lab', w.l || P.l), row = el('div', 'chips');
       box.appendChild(lab); box.appendChild(row);
       P.opts.forEach(function (o, i) { var b = el('button', 'chip', o); b.type = 'button'; b.onclick = function () { setDial(w.k, i, w.k === 'grid'); vib(5); }; row.appendChild(b); });
       function show() { Array.prototype.forEach.call(row.children, function (b, i) { b.classList.toggle('on', i === piece.v[w.k]); }); }
@@ -303,11 +359,167 @@
       });
       return box;
     },
-    text: function () {
-      var box = el('div', 'w'), lab = el('div', 'lab', 'text  ( / = new line )'), inp = plainInput(el('input'));
+    text: function (w) {
+      var box = el('div', 'w'), lab = el('div', 'lab', w.l || 'text  ( / = new line,  | = next word )'), inp = plainInput(el('input'));
       inp.value = piece.text || ''; inp.setAttribute('aria-label', 'text');
-      inp.addEventListener('input', function () { piece.text = inp.value; apply(false); });
+      inp.addEventListener('input', function () { piece.text = inp.value; apply(false); refreshHot('textFromInput'); });
+      onHot('textFromWords', function () { if (document.activeElement !== inp) inp.value = piece.text || ''; });
       box.appendChild(lab); box.appendChild(inp); return box;
+    },
+    // one tap to a type morph: type alone, three words, the sweep; everything else stays (undo brings it back)
+    morphStart: function () {
+      var box = el('div', 'w'), row = el('div', 'btns wrap'), b = el('button', 'btn', 'example: GOOD \u2192 NIGHT \u2192 GOOD NIGHT'); b.type = 'button';
+      b.onclick = function () {
+        clearTimeout(histT); commitHistory();
+        var v = piece.v; v.stOn = 0; v.rgOn = 0; v.tyOn = 1; v.tyMorph = 1; v.tyMode = 0; v.tyVal = 255; v.bg = 0;
+        v.tyFont = 1; v.tySize = 48; v.tyX = 50; v.tyY = 50; v.tyTrack = 0; v.sortMode = 3; v.beatOpen = 100;
+        v.sortAng = 270; v.sortMax = 48; v.sweepStag = 40; v.hitLen = 8;
+        v.openHow = 0; v.stagBy = 0; v.stagExit = 0; v.hitHold = 0; v.hitRise = 25; v.hitsBetween = 0; v.easeOut = 0; v.easeBack = 0;
+        if (!piece.seq.hits) piece.seq.hits = 0x1111;
+        piece.text = 'GOOD | NIGHT | GOOD / NIGHT'; piece.mods = {};
+        apply(true); render(); vib(8);
+      };
+      row.appendChild(b); box.appendChild(row); return box;
+    },
+    // starters: a motion for the words you have (a reveal puts 'nothing' first); colours and fonts stay
+    starters: function () {
+      var box = el('div', 'w'), lab = el('div', 'lab', 'start from'), row = el('div', 'btns wrap');
+      Object.keys(STARTERS).forEach(function (name) {
+        var b = el('button', 'btn', name); b.type = 'button'; b.onclick = function () { starter(name); }; row.appendChild(b);
+      });
+      box.appendChild(lab); box.appendChild(row); return box;
+    },
+    // where the letters come in from (and leave to): sets the sort direction; lit only on an exact match
+    dir4: function () {
+      var box = el('div', 'w'), lab = el('div', 'lab', 'comes in from'), seg = el('div', 'seg dir4');
+      [['→', 'from left', 180], ['←', 'from right', 0], ['↓', 'from top', 90], ['↑', 'from bottom', 270]].forEach(function (d) {
+        var b = el('button', ''); b.type = 'button'; b.setAttribute('aria-label', d[1]); b.dataset.deg = d[2];
+        b.appendChild(el('b', '', d[0])); b.appendChild(el('small', '', d[1]));
+        b.onclick = function () { setDial('sortAng', d[2], true); vib(5); }; seg.appendChild(b);
+      });
+      function show() { Array.prototype.forEach.call(seg.children, function (b) { var on = +b.dataset.deg === piece.v.sortAng; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }); }
+      box.appendChild(lab); box.appendChild(seg); show(); onHot('sortAng', show); return box;
+    },
+    // the words: one chip per slot in loop order (xN = it stays for N parts, a dashed chip = nothing, the outlined one
+    // is on screen now). Tap a chip to edit it: Return makes a second line; move it, copy it, remove it (two taps).
+    // Stored in the text the address carries as 'A | B / C' - nobody has to type those.
+    words: function () {
+      var box = el('div', 'w words'), strip = el('div', 'chips wrap wordstrip'), ed = el('div', 'wordedit'), skip = el('div', 'note why');
+      box.appendChild(el('div', 'lab', 'words, in the order they come')); box.appendChild(strip); box.appendChild(skip); box.appendChild(ed);
+      var slots = DF.textToWords(piece.text), armedRm = 0, armT = 0;
+      if (wordSel >= slots.length) wordSel = -1;
+      // mode 0: a keystroke; 1: a change of slots (undo step, redraw); 2: a word settled (undo step, no redraw - a redraw
+      // here would swallow the tap that moved the focus). A second word turns 'words change' on. The 'as text' field follows.
+      function save(mode) {
+        if (mode) { clearTimeout(histT); commitHistory(); }
+        piece.text = DF.wordsToText(slots);
+        var total = slots.reduce(function (a, s) { return a + (s.w ? s.n : 0); }, 0);
+        if (mode && total >= 2 && !(piece.v.tyOn && piece.v.tyMorph)) {
+          piece.v.tyOn = 1; piece.v.tyMorph = 1; refreshHot('tyOn'); refreshHot('tyMorph'); toast('words change on the beat');
+        }
+        apply(false); refreshHot('textFromWords');
+        if (mode === 1) draw();
+      }
+      function linesOf(w) { return w.split(/\n|\s*\/\s*/); }                // as the engine splits a word into lines
+      function label(s) { return s.w === '_' ? '∅ nothing' : (s.w ? linesOf(s.w).join(' ⏎ ') : '…'); }
+      function draw() {
+        // an empty word nobody is editing goes (it never reached the text)
+        for (var k = slots.length - 1; k >= 0; k--) if (!slots[k].w && k !== wordSel) { slots.splice(k, 1); if (wordSel > k) wordSel--; }
+        strip.innerHTML = '';
+        slots.forEach(function (s, i) {
+          var c = el('button', 'chip word' + (i === wordSel ? ' sel' : '') + (s.w === '_' ? ' blank' : '')); c.type = 'button';
+          c.dataset.slot = i; c.appendChild(document.createTextNode(label(s)));
+          if (s.n > 1) c.appendChild(el('span', 'badge', '×' + s.n));
+          c.onclick = function () { wordSel = i === wordSel ? -1 : i; draw(); vib(4); };
+          strip.appendChild(c);
+        });
+        var add = el('button', 'chip add', '+ word'); add.type = 'button';
+        add.onclick = function () {
+          var at = wordSel >= 0 ? wordSel + 1 : slots.length; slots.splice(at, 0, { w: '', n: 1 }); wordSel = at; draw(); vib(4);
+          var ta = ed.querySelector('textarea'); if (ta) ta.focus();
+        };
+        var none = el('button', 'chip add', '+ nothing'); none.type = 'button';
+        none.onclick = function () {
+          var has = slots.some(function (s) { return s.w === '_'; }), at = !has ? 0 : (wordSel >= 0 ? wordSel + 1 : slots.length);
+          slots.splice(at, 0, { w: '_', n: 1 }); wordSel = at; save(1); vib(4);
+        };
+        strip.appendChild(add); strip.appendChild(none);
+        var m = engine && engine.morph, off = !(piece.v.tyOn && piece.v.tyMorph) && slots.length > 1;
+        skip.textContent = off ? 'words change is off: the text shows as typed, on one line' :
+          m && m.skipped && m.skipped.length ? 'some words have no hit of their own and are skipped: add sort hits (TIMING) or use fewer words' : '';
+        skip.hidden = !skip.textContent;
+        drawEditor();
+      }
+      function btn(row, text, ok, fn) { var b = el('button', 'btn', text); b.type = 'button'; b.disabled = !ok; b.onclick = fn; row.appendChild(b); return b; }
+      function drawEditor() {
+        // every redraw removes the text box, and WebKit sends no blur for a removed field: the tab bar comes back here
+        document.body.classList.remove('typing'); armedRm = 0; clearTimeout(armT);
+        ed.innerHTML = ''; var s = slots[wordSel], cpB = null, plusB = null;
+        if (!s) { ed.hidden = true; return; }
+        ed.hidden = false;
+        if (s.w !== '_') {
+          var ta = plainInput(el('textarea')); ta.className = 'wordta'; ta.setAttribute('aria-label', 'word');
+          ta.value = linesOf(s.w).join('\n'); ta.rows = Math.min(3, Math.max(1, ta.value.split('\n').length));
+          ta.setAttribute('autocapitalize', 'characters');
+          var warned = false, edited = false;
+          // a 4th line is refused before it lands (cutting afterwards would drop the last line)
+          ta.addEventListener('beforeinput', function (e) {
+            if ((e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') && ta.value.split('\n').length >= 3) e.preventDefault();
+          });
+          ta.addEventListener('input', function () {
+            edited = true;
+            var v = ta.value;
+            if (/[|\/]/.test(v)) { v = v.replace(/[|\/]/g, ''); if (!warned) { toast('no | or / needed: chips make words, Return makes a line'); warned = true; } }
+            var ls = v.split('\n'); if (ls.length > 3) ls = ls.slice(0, 3);          // (a pasted block)
+            if (v !== ta.value || ls.length !== ta.value.split('\n').length) ta.value = ls.join('\n');
+            ta.rows = Math.min(3, Math.max(1, ls.length));
+            s.w = ls.map(function (l) { return l.trim(); }).filter(Boolean).join(' / ');
+            if (cpB) { cpB.disabled = !s.w; plusB.disabled = !(s.n < 4 && s.w); }
+            var c = strip.querySelector('.word.sel'); if (c) c.firstChild.nodeValue = label(s);
+            save(0);
+          });
+          ta.addEventListener('paste', function (e) {
+            var t = (e.clipboardData || window.clipboardData).getData('text');
+            if (t && t.indexOf('|') >= 0) { e.preventDefault(); var add = DF.textToWords(t); slots.splice.apply(slots, [wordSel, 1].concat(add)); save(1); }
+          });
+          ta.addEventListener('focus', function () { document.body.classList.add('typing'); setTimeout(function () { try { ta.scrollIntoView({ block: 'center' }); } catch (x) { } }, 300); });
+          ta.addEventListener('blur', function () {
+            document.body.classList.remove('typing');
+            // an empty word is dropped without a redraw under the finger (the next draw removes it; this catches a tap elsewhere)
+            if (!s.w) { wordSel = -1; setTimeout(function () { if (wordSel < 0 && slots.indexOf(s) >= 0 && !s.w && document.body.contains(box)) draw(); }, 400); }
+            else if (edited) save(2);
+          });
+          ed.appendChild(ta);
+        } else ed.appendChild(el('div', 'note', 'nothing: an empty frame the words grow out of and go back into'));
+        var row = el('div', 'btns wrap acts');
+        btn(row, '◂ earlier', wordSel > 0, function () { var t = slots.splice(wordSel, 1)[0]; slots.splice(--wordSel, 0, t); save(1); vib(4); });
+        btn(row, 'later ▸', wordSel < slots.length - 1, function () { var t = slots.splice(wordSel, 1)[0]; slots.splice(++wordSel, 0, t); save(1); vib(4); });
+        cpB = btn(row, 'copy', !!s.w, function () { if (!s.w) return; slots.splice(wordSel + 1, 0, { w: s.w, n: 1 }); wordSel++; save(1); vib(4); });
+        var rm = btn(row, 'remove', true, function () {
+          if (armedRm !== 1) {
+            armedRm = 1; rm.textContent = 'tap again to remove'; rm.classList.add('hi');
+            clearTimeout(armT); armT = setTimeout(function () { armedRm = 0; rm.textContent = 'remove'; rm.classList.remove('hi'); }, 3000); return;
+          }
+          armedRm = 0; clearTimeout(armT); slots.splice(wordSel, 1); wordSel = -1; save(1); vib(8);
+        });
+        var stays = el('div', 'stays'); stays.appendChild(el('span', 'lab', 'stays for'));
+        btn(stays, '−', s.n > 1, function () { s.n--; save(1); vib(3); });
+        stays.appendChild(el('span', 'val mono', '×' + s.n));
+        plusB = btn(stays, '+', s.n < 4 && !!s.w, function () { if (!s.w || s.n >= 4) return; s.n++; save(1); vib(3); });
+        ed.appendChild(row); ed.appendChild(stays);
+      }
+      draw();
+      // the 'as text' field was typed in: the chips follow (the focus is there, so no finger is on the strip)
+      onHot('textFromInput', function () { slots = DF.textToWords(piece.text); if (wordSel >= slots.length) wordSel = -1; draw(); });
+      onHot('tyMorph', draw); onHot('tyOn', draw);
+      // the word on screen now (the engine's current word, mapped to its slot)
+      var tick = setInterval(function () {
+        if (!document.body.contains(box)) { clearInterval(tick); return; }
+        var wi = engine && engine.morph ? engine.word : -1, acc = 0, cur = -1;
+        for (var i = 0; i < slots.length; i++) { if (!slots[i].w) continue; if (wi >= acc && wi < acc + slots[i].n) { cur = i; break; } acc += slots[i].n; }
+        Array.prototype.forEach.call(strip.querySelectorAll('.word'), function (c) { c.classList.toggle('now', +c.dataset.slot === cur); });
+      }, 120);
+      return box;
     },
     palette: function (w) { return paletteWidget(w.which); },
     layers: function () {
@@ -396,7 +608,8 @@
       dlReady.then(function (d) { if (IN_ARTIFACT && FRAMED && !d) { png.hidden = true; out.textContent = 'saving files is not available in this view'; } });
       mp4.onclick = exportMP4; png.onclick = savePNG; link.onclick = copyLink;
       row.appendChild(mp4); row.appendChild(png); row.appendChild(link);
-      box.appendChild(row); box.appendChild(out); return box;
+      var share = el('div', 'btns wrap'); share.id = 'shareRow'; drawShare(share);
+      box.appendChild(row); box.appendChild(share); box.appendChild(out); return box;
     },
     bench: function () {
       var box = el('div', 'w'), b = el('button', 'btn', 'benchmark this device (15 s)'); b.type = 'button';
@@ -406,7 +619,18 @@
     },
     saved: function () { return savedWidget(); }
   };
-  function canMP4() { return !!(window.Mp4Muxer && DF.exportMP4 && 'VideoEncoder' in window && 'AudioEncoder' in window); }
+  // the home-screen app: only pages built by tools/make_app.py link a manifest; they get the offline cache (sw.js).
+  // A new version installs in the background and takes over at once; this page says so and the next open runs it.
+  function registerApp() {
+    if (IN_ARTIFACT || !document.querySelector('link[rel=manifest]') || !('serviceWorker' in navigator) || !window.isSecureContext) return;
+    var had = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function (reg) {
+      window.DF_SW = 'registered';
+      document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') reg.update().catch(function () { }); });
+    }, function (e) { window.DF_SW = 'failed: ' + e; });
+    navigator.serviceWorker.addEventListener('controllerchange', function () { if (had) toast('updated - close and reopen to use the new version'); had = true; });
+  }
+  function canMP4() { return !!(window.Mp4Muxer && DF.exportMP4 && 'VideoEncoder' in window); }
   function clipFrames(v) { var L = DF.loopFrames(v); return v.clipWhole ? Math.max(1, Math.ceil(v.clip * 60 / L - 1e-9)) * L : Math.round(v.clip * 60); }
 
   // ---------------------------------------------------------------- number + LFO editor (long-press a fader)
@@ -692,21 +916,42 @@
   // ---------------------------------------------------------------- export (desktop Chrome; PNG anywhere)
   function clone(p) { return JSON.parse(JSON.stringify(p)); }
   function out(msg) { var o = $('exportOut'); if (o) o.textContent = msg; toast(msg); }
-  function exportEngine(p) {
+  function exportEngine(p, video) {
     var cv = document.createElement('canvas'), dims = DF.gridSize(p.v), k = Math.max(1, Math.round(1080 / dims[0]));
+    // H.264 needs even sides: grid 120 at 9:16 is 120x213, so x9 = 1917 would fail; one step down (x8) is even
+    if (video && ((dims[0] * k) % 2 || (dims[1] * k) % 2)) k += k > 1 ? -1 : 1;
     var e = new DF.Engine(cv, { k: k }); e.setPiece(p); return { e: e, cv: cv };
   }
   function fileTag(p) { return p.seed.slice(0, 10).replace(/[^A-Za-z0-9_-]+/g, '-'); }
   // inside the claude.ai viewer the host asks you to confirm the save; elsewhere a plain browser download
+  // on a phone (touch, and the browser can share files) the file waits behind a button: the share sheet needs a fresh tap,
+  // and it is where iOS offers Save Video / Save Image
   async function saveFile(blob, name) {
     var dl = IN_ARTIFACT ? (DL || await dlReady) : null;
     if (dl) { await dl.save({ filename: name, data: blob }); return 'saved'; }
     if (IN_ARTIFACT && FRAMED) throw new Error('saving files is not available in this view');
+    var file = null;
+    try { file = new File([blob], name, { type: blob.type }); } catch (e) { }
+    var phone = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    if (phone && file && navigator.canShare && navigator.canShare({ files: [file] })) { offerShare(file); return 'ready - tap "save / share"'; }
     DF.saveBlob(blob, name); return 'download started';
+  }
+  // the finished file waits here until it is shared (a tab change rebuilds the panel; the file must not go with it)
+  var pendingShare = null;
+  function offerShare(file) { pendingShare = file; drawShare($('shareRow')); }
+  function drawShare(host) {
+    if (!host) return;
+    host.innerHTML = ''; host.hidden = !pendingShare; if (!pendingShare) return;
+    var file = pendingShare, b = el('button', 'btn hi', 'save / share ' + (/\.mp4$/.test(file.name) ? 'the video' : 'the picture')); b.type = 'button';
+    b.onclick = function () {
+      navigator.share({ files: [file] }).then(function () { if (pendingShare === file) pendingShare = null; host.hidden = true; toast('shared'); },
+        function (e) { if (e && e.name === 'AbortError') return; DF.saveBlob(file, file.name); toast('downloading instead'); });
+    };
+    host.appendChild(b); window.DF_SHARE_READY = file.name;
   }
   async function exportMP4() {
     var btn = $('exportMp4'); if (!btn || btn.disabled) return; btn.disabled = true;
-    var p = clone(piece), X = exportEngine(p), frames = clipFrames(p.v), rows = {};
+    var p = clone(piece), X = exportEngine(p, true), frames = clipFrames(p.v), rows = {};
     try {
       var r = await DF.exportMP4({
         canvas: X.cv, width: X.cv.width, height: X.cv.height, fps: 60, frames: frames,
@@ -717,7 +962,7 @@
       var name = 'ditherfield_' + fileTag(p) + '_' + DF.stamp() + '.mp4';
       var how = await saveFile(r.blob, name);
       r.info.seconds = +(frames / 60).toFixed(2); r.info.name = name; window.DF_LAST_EXPORT = r.info;
-      out(how + ': ' + name + ' (' + r.info.width + 'x' + r.info.height + ', ' + r.info.seconds + ' s)');
+      out(how + ': ' + name + ' (' + r.info.width + 'x' + r.info.height + ', ' + r.info.seconds + ' s' + (r.info.audio === 'aac' ? '' : ', no sound: this browser cannot encode it') + ')');
     } catch (e) { window.DF_LAST_EXPORT = { error: String(e && e.message || e) }; out('export failed: ' + (e && (e.code || e.message) || e)); }
     var lc = X.e.gl.getExtension('WEBGL_lose_context'); if (lc) lc.loseContext();
     btn.disabled = false;
@@ -870,6 +1115,7 @@
     apply(true); render(); showUndo();
     if (dec.warning) toast(dec.warning);
     $('stage').addEventListener('click', function (e) { if (e.target.id === 'cv' || e.target.id === 'stage') togglePanel(); });
+    registerApp();
     $('soundBtn').onclick = toggleSound;
     $('undoBtn').onclick = undo;
     $('playBtn').onclick = function () {

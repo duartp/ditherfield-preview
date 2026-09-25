@@ -28,7 +28,10 @@
     'uniform int uBg;',
     'uniform int uStOn, uStGain, uStCut, uStMode; uniform uint uStC, uStS, uStPer, uStPh;',
     'uniform int uRgOn, uRgN, uRgGain, uRgCut, uRgMode, uRgOrbR; uniform ivec2 uRgC; uniform uint uRgPer, uRgPh, uRgOrbPh;',
-    'uniform int uTyOn, uTyVal, uTyMode; uniform sampler2D uType;',
+    'uniform int uTyOn, uTyVal, uTyMode, uTyMix; uniform sampler2D uType, uType2;',
+    'const int BY4[16] = int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);',
+    'bool typeAt(ivec2 p){ ivec2 q = ivec2(p.x, uSize.y - 1 - p.y); bool b = uTyMix > 0 && BY4[(p.y & 3) * 4 + (p.x & 3)] * 256 + 128 < uTyMix;',
+    '  return (b ? texelFetch(uType2, q, 0).r : texelFetch(uType, q, 0).r) > 0.5; }',
     'out uvec4 o;',
     'int shape(int s, int gain){ int v = (s + 32768) >> 8; v = (((v - 128) * gain) >> 8) + 128; return clamp(v, 0, 255); }',
     'int blend(int acc, int v, int mode){',
@@ -57,7 +60,7 @@
     '    int v = shape(sum / uRgN, uRgGain);',
     '    if (v >= uRgCut) { acc = blend(acc, v, uRgMode); id = 2; }',
     '  }',
-    '  if (uTyOn != 0 && texelFetch(uType, ivec2(p.x, uSize.y - 1 - p.y), 0).r > 0.5) {',
+    '  if (uTyOn != 0 && typeAt(p)) {',
     '    if (uTyMode == 1) acc = uBg; else if (uTyMode == 2) acc = 255 - acc; else acc = uTyVal;',
     '    id = 3;',
     '  }',
@@ -141,13 +144,40 @@
   ].join('\n');
   S.invFS = H + 'flat in uint vV; out uvec4 o; void main(){ o = uvec4(vV, 0u, 0u, 0u); }';
   // ...then key = round(mix(home, dest, t) * 32): sorting by it is a permutation at every t, home at 0, sorted at 1
+  // Together (uTogether): every line moves at once and each pixel runs on its own clock - the hit's phase minus a delay
+  // from its rank ('lands first'), through the chosen ease (iease = mod.js DF.iease). Mirrored in selftest.js cpuSweep.
   S.blendInit = H + LINES + [
-    'uniform usampler2D uDestOfHome, uSrc; uniform int uT, uStag; out uvec4 o;',       // uT, uStag: 0..4096
+    'uniform usampler2D uDestOfHome, uSrc; uniform isampler2D uEase; out uvec4 o;',
+    'uniform int uT, uStag, uTogether, uStagBy, uExit, uPh, uFall, uKind;',            // uT, uStag, uPh: 0..4096
+    'int iease(int kind, int x){',
+    '  if (kind == 0) return (x * x / 4096) * (3 * 4096 - 2 * x) / 4096;',
+    '  if (kind == 1) return x;',
+    '  if (kind == 5) return ((x * 4) >> 12) * 1024;',
+    '  int row = kind == 2 ? 0 : kind == 3 ? 1 : kind == 4 ? 2 : 3;',
+    '  int i = min(255, x >> 4); int a = texelFetch(uEase, ivec2(i, row), 0).r; int b = texelFetch(uEase, ivec2(i + 1, row), 0).r;',
+    '  return a + (((b - a) * (x - i * 16)) >> 4); }',
+    // lands first: a rank 0..255 of the home pixel (GL coordinates: y up), lower = earlier
+    'int rankOf(ivec2 p, int lum, int L){ int W1 = max(1, uSize.x - 1), H1 = max(1, uSize.y - 1);',
+    '  if (uStagBy == 1) return p.x * 255 / W1;',
+    '  if (uStagBy == 2) return 255 - p.x * 255 / W1;',
+    '  if (uStagBy == 3) return (uSize.y - 1 - p.y) * 255 / H1;',
+    '  if (uStagBy == 4) return p.y * 255 / H1;',
+    '  if (uStagBy == 5 || uStagBy == 6) { int c = max(abs(2 * p.x - uSize.x + 1) * 255 / W1, abs(2 * p.y - uSize.y + 1) * 255 / H1); return uStagBy == 5 ? c : 255 - c; }',
+    '  if (uStagBy == 7) return int((uint(L + 8192) * 2246822519u) >> 24);',
+    '  return 255 - lum; }',
     'void main(){ ivec2 p = ivec2(gl_FragCoord.xy); ivec2 uL = toLine(p); int d = int(texelFetch(uDestOfHome, p, 0).x);',
-    '  int lum = int(texelFetch(uSrc, p, 0).r);',
-    '  int ti = clamp(((uT - (uStag * lum) / 255) * 4096) / max(1, 4096 - uStag), 0, 4096);',
-    '  ti = (ti * ti / 4096) * (3 * 4096 - 2 * ti) / 4096;',                              // smoothstep, fixed point
-    '  int k = (uL.x * 32 * (4096 - ti) + d * 32 * ti + 2048) / 4096;',
+    '  int lum = int(texelFetch(uSrc, p, 0).r); int r = rankOf(p, lum, uL.y);',
+    '  if (uTogether == 0) {',
+    '    int s = 255 - r;',                                                                  // bright first: s = lum, as always
+    '    int ti = clamp(((uT - (uStag * s) / 255) * 4096) / max(1, 4096 - uStag), 0, 4096);',
+    '    ti = (ti * ti / 4096) * (3 * 4096 - 2 * ti) / 4096;',                              // smoothstep, fixed point
+    '    int k = (uL.x * 32 * (4096 - ti) + d * 32 * ti + 2048) / 4096;',
+    '    o = uvec4((uint(k) << 16) | uint(uL.x), 0u, 0u, 0u); return; }',
+    '  int s = uFall != 0 ? r : (uExit == 0 ? r : uExit == 1 ? 255 - r : 0);',
+    '  int num = (uPh - (uStag * s) / 255) * 4096;',
+    '  int lin = num <= 0 ? 0 : min(4096, num / max(1, 4096 - uStag));',
+    '  int e = iease(uKind, lin); int ti = uFall != 0 ? 4096 - e : e;',                    // overshoot: ti a bit past 0 / 4096
+    '  int k = (uL.x * 32 * (4096 - ti) + d * 32 * ti + 2048 + 16384 * alongLen()) / 4096;', // + 4 * along keeps it positive
     '  o = uvec4((uint(k) << 16) | uint(uL.x), 0u, 0u, 0u); }'
   ].join('\n');
 

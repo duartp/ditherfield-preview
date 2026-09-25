@@ -122,6 +122,13 @@
     { id: 45, k: 'tyTrack',  g: 'type',    l: 'tracking',         min: -20, max: 60, st: 1, d: 0 },
     { id: 46, k: 'tyVal',    g: 'type',    l: 'brightness',       min: 0, max: 255, st: 1, d: 255 },
     { id: 47, k: 'tyMode',   g: 'type',    l: 'mode',             opts: ['solid', 'cut out', 'invert'], d: 0 },
+    // words split by '|' in the text: each part of the loop gets the next word, changed at the top of a sort hit
+    { id: 48, k: 'tyMorph',  g: 'type',    l: 'morph words',      opts: ['off', 'on the beat'], d: 0 },
+    // hold still: only the hits that change the word sort (and sound); the word stays still between them
+    { id: 67, k: 'hitsBetween', g: 'type', l: 'between word changes', opts: ['sort too', 'hold still'], d: 0 },
+    { id: 49, k: 'tyAlign',  g: 'type',    l: 'align',            opts: ['centre', 'left', 'right'], d: 0 },
+    // first line stays: the first line sits at the position, the rest hang below (GOOD -> GOOD / NIGHT keeps GOOD put)
+    { id: 39, k: 'tyStack',  g: 'type',    l: 'lines',            opts: ['centred block', 'first line stays'], d: 0 },
 
     { id: 50, k: 'sortMode', g: 'sort',    l: 'sort',             opts: ['off', 'filter', 'process', 'sweep'], d: 2 },
     { id: 51, k: 'sortAng',  g: 'sort',    l: 'direction (deg)',  min: 0, max: 359, st: 1, d: 270 },
@@ -138,6 +145,19 @@
     // each sort hit opens sort lines one by one (whole window, full length; share = hit envelope x this dial), so every
     // beat sorts visibly whatever the window dials say; they set the look between hits (engine.js findSpans)
     { id: 62, k: 'beatOpen', g: 'sort',    l: 'beat opens window (%)', min: 0, max: 100, st: 1, d: 100 },
+    // the shape of each hit: how the sort goes out, and how the pixels come home (mod.js DF.ease)
+    { id: 63, k: 'easeOut',  g: 'sort',    l: 'ease out (sorting)', opts: ['smooth', 'linear', 'snap', 'slow start', 'bounce', 'steps', 'overshoot'], d: 0 },
+    // type motion (2026-09-25). Every default is the code path as it was: old pieces and links look the same.
+    // lines open: one by one (the beat's random line order) or together (every line at once; the stagger then decides who
+    // moves first, pixel by pixel, through the chosen ease - the ease becomes visible)
+    { id: 65, k: 'openHow',  g: 'sort',    l: 'lines open',       opts: ['one by one', 'together'], d: 0 },
+    // which pixels land first (and leave first): by brightness as always, or by where they live
+    { id: 66, k: 'stagBy',   g: 'sort',    l: 'stagger: lands first', opts: ['bright first', 'left first', 'right first', 'top first', 'bottom first', 'centre out', 'edges in', 'random lines'], d: 0 },
+    { id: 80, k: 'stagExit', g: 'sort',    l: 'leaves',           opts: ['same order', 'reverse', 'all at once'], d: 0 },
+    // the shape of a hit: out share (the rise) and a hold at the top, fully sorted, before coming home
+    { id: 68, k: 'hitHold',  g: 'sort',    l: 'hold sorted (%)',  min: 0, max: 60, st: 1, d: 0 },
+    { id: 69, k: 'hitRise',  g: 'sort',    l: 'out share (%)',    min: 5, max: 90, st: 1, d: 25 },
+    { id: 64, k: 'easeBack', g: 'sort',    l: 'ease back (coming home)', opts: ['smooth', 'linear', 'snap', 'slow start', 'bounce', 'steps', 'overshoot'], d: 0 },
 
     { id: 70, k: 'dither',   g: 'colour',  l: 'dither',           opts: ['bayer 2', 'bayer 4', 'bayer 8', 'blue noise'], d: 1 },
     { id: 71, k: 'colMode',  g: 'colour',  l: 'colour mode',      opts: ['gradient map', 'nearest colour', 'per channel'], d: 0 },

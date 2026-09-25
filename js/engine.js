@@ -71,8 +71,11 @@
     this.timers = new Timers(gl);
     this.blue = this.texture(64, 64, gl.R8, gl.RED, gl.UNSIGNED_BYTE,
       Uint8Array.from(atob(DF.BLUE64), function (c) { return c.charCodeAt(0); }));
+    // the easing tables for the sweep shader (rows: snap, slow start, bounce, overshoot), whole numbers
+    var ET = new Int32Array(257 * 4); [2, 3, 4, 6].forEach(function (k, r) { ET.set(DF.EASE_T[k], r * 257); });
+    this.easeTex = this.texture(257, 4, gl.R32I, gl.RED_INTEGER, gl.INT, ET);
     this.typeCanvas = document.createElement('canvas');
-    this.typeTex = null; this.typeKey = '';
+    this.typeTex = null; this.typeTexs = []; this.typeKey = '';
     this.W = 0; this.H = 0; this.procF = -2; this.passCount = 0;
   }
 
@@ -122,7 +125,8 @@
     this.setScale(this.k);
     this.geom = g;
     this.L = DF.loopFrames(v);
-    this.timeline = DF.hitTimeline(piece);
+    this.morph = DF.morphTimeline(piece);
+    this.timeline = (this.morph && this.morph.tl) || DF.hitTimeline(piece);
     var along = g.swap ? this.H : this.W, cross = g.swap ? this.W : this.H;
     var off = function (u) { return (u * g.slope + 512) >> 10; };
     var o0 = off(0), o1 = off(along - 1);
@@ -207,8 +211,12 @@
     this.whole = a; this.spanB = b;
   };
   // how far the beat opens the window at loop frame lf: 0..4096 (the hit envelope times the beatOpen dial)
+  // (lines open 'together': the whole hit opens every line at once; the sweep's stagger does the rest)
   Engine.prototype.openAt = function (lf) {
-    return this.timeline && this.v.beatOpen ? Math.round(DF.hitEnv(this.timeline[lf]) * this.v.beatOpen / 100) : 0;
+    var v = this.v; if (!this.timeline || !v.beatOpen) return 0;
+    var h = this.timeline[lf];
+    if (v.openHow) return h.d < h.len ? Math.round(4096 * v.beatOpen / 100) : 0;
+    return Math.round(DF.hitEnv(h) * v.beatOpen / 100);
   };
   // mult scales every band's amount (filter: the hit envelope). open (0..4096) is the share of lines the beat has
   // opened: those sort everything (window 0..255) at full length, so a hit always sorts, and a half-open beat opens
@@ -260,7 +268,9 @@
     var v = this.v, L = this.L, W = this.W, H = this.H, self = this;
     var ang = v.stAngle * 65536 / 360 | 0;
     var c = DF.isin(ang + 16384), s = DF.isin(ang);
-    this.run('source', this.src, { uType: this.typeTex }, function (gl, u) {
+    var m = this.morph; this.word = m ? m.at[lf] : 0;
+    var ta = m ? this.typeTexs[m.a[lf]] : this.typeTex, tb = m ? this.typeTexs[m.b[lf]] : this.typeTex, mix = m ? m.mix[lf] : 0;
+    this.run('source', this.src, { uType: ta, uType2: tb }, function (gl, u) {
       gl.uniform1i(u.uBg, v.bg);
       gl.uniform1i(u.uStOn, v.stOn); gl.uniform1i(u.uStGain, v.stGain); gl.uniform1i(u.uStCut, v.stCut); gl.uniform1i(u.uStMode, v.stMode);
       gl.uniform1ui(u.uStC, c >>> 0); gl.uniform1ui(u.uStS, s >>> 0);
@@ -271,29 +281,40 @@
       gl.uniform2i(u.uRgC, Math.round(W * 16 * v.rgX / 100), Math.round(H * 16 * (100 - v.rgY) / 100));
       gl.uniform1ui(u.uRgPer, Math.round(65536 / v.rgPeriod)); gl.uniform1ui(u.uRgPh, phase(v.rgSpeed, lf, L));
       gl.uniform1ui(u.uRgOrbPh, phase(v.rgOrbSpd, lf, L));
-      gl.uniform1i(u.uTyOn, v.tyOn); gl.uniform1i(u.uTyVal, v.tyVal); gl.uniform1i(u.uTyMode, v.tyMode);
+      gl.uniform1i(u.uTyOn, v.tyOn); gl.uniform1i(u.uTyVal, v.tyVal); gl.uniform1i(u.uTyMode, v.tyMode); gl.uniform1i(u.uTyMix, mix);
     });
   };
 
+  // the type raster: one texture per word when morphing (else the whole text), all at one size so words don't jump
   Engine.prototype.updateType = function () {
-    var v = this.v, text = this.piece.text || '';
-    var key = [text, v.tyFont, v.tySize, v.tyX, v.tyY, v.tyTrack, this.W, this.H].join('|');
+    var v = this.v, self = this, wordsOn = !!(v.tyOn && v.tyMorph);
+    // words mode with nothing to morph (one word, a lone '_', no hits): the first real word, never the raw 'A | B' text
+    var list = !this.morph && wordsOn ? (this.piece.text || '').split('|').map(function (s) { return s.trim(); }).filter(Boolean) : null;
+    var words = this.morph ? this.morph.words : list ? [list.filter(function (w) { return w !== '_'; })[0] || (list.length ? '_' : '')] : [this.piece.text || ''];
+    var key = [words.join('|'), v.tyFont, v.tySize, v.tyX, v.tyY, v.tyTrack, v.tyAlign, v.tyStack, this.W, this.H].join('|');
     if (key === this.typeKey && this.typeTex) return;
     this.typeKey = key;
     var c = this.typeCanvas; c.width = this.W; c.height = this.H;
     var g = c.getContext('2d');
-    g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height);
-    g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.textAlign = ['center', 'left', 'right'][v.tyAlign || 0]; g.textBaseline = 'middle';
     g.font = v.tySize + 'px ' + DF.fontFamily(v.tyFont);
     if ('letterSpacing' in g) g.letterSpacing = v.tyTrack + 'px';
-    var lines = text.split(/\n|\s*\/\s*/), size = v.tySize;
-    // shrink to fit: the widest line stays inside 92% of the frame
-    var widest = Math.max.apply(null, lines.map(function (ln) { return g.measureText(ln).width; }));
+    // a word '_' (morph only) is nothing: a black frame, left out of the fit
+    var blank = function (w) { return wordsOn && w === '_'; };
+    var sets = words.map(function (w) { return blank(w) ? [] : w.split(/\n|\s*\/\s*/); }), size = v.tySize;
+    // shrink to fit: the widest line of any word stays inside 92% of the frame
+    var widest = Math.max.apply(null, [0].concat([].concat.apply([], sets).map(function (ln) { return g.measureText(ln).width; })));
     if (widest > this.W * 0.92) { size = Math.max(6, Math.floor(size * this.W * 0.92 / widest)); g.font = size + 'px ' + DF.fontFamily(v.tyFont); }
-    var lh = Math.round(size * 0.95);
-    var x = Math.round(this.W * v.tyX / 100), y0 = Math.round(this.H * v.tyY / 100 - (lines.length - 1) * lh / 2);
-    lines.forEach(function (ln, i) { g.fillText(ln, x, y0 + i * lh); });
-    this.typeTex = { t: GL.textureFrom(this.gl, c, this.typeTex ? this.typeTex.t : null) };
+    var lh = Math.round(size * 0.95), x = Math.round(this.W * v.tyX / 100);
+    var old = this.typeTexs;
+    this.typeTexs = sets.map(function (lines, i) {
+      g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#fff';
+      var y0 = v.tyStack ? Math.round(self.H * v.tyY / 100) : Math.round(self.H * v.tyY / 100 - (lines.length - 1) * lh / 2);
+      lines.forEach(function (ln, j) { g.fillText(ln, x, y0 + j * lh); });
+      return { t: GL.textureFrom(self.gl, c, old[i] ? old[i].t : null) };
+    });
+    for (var i = this.typeTexs.length; i < old.length; i++) this.gl.deleteTexture(old[i].t);
+    this.typeTex = this.typeTexs[0];
   };
 
   // the process: out-phase odd-even passes (pixels travel), back-phase home-sort (they land home); reset each loop
@@ -304,10 +325,12 @@
     else { this.run('refresh', this.stO, { uSrc: this.src, uState: this.st }); this.swapState(); }
     if (this.timeline) {
       // each sort hit: pixels travel out for half the hit, then come home before the next hit or the loop end
-      var h = this.timeline[lf], outPart = Math.max(1, Math.round(h.len / 2));
+      // (hold sorted: a pause at the top with no passes; the way home is then shorter)
+      var h = this.timeline[lf], outPart = Math.max(1, Math.round(h.len / 2)), hf = DF.procHold(h.len, v);
       if (h.wrapped) n = 0;
       else if (h.d < outPart) n = v.procPass;
-      else { home = true; n = Math.max(v.procPass, Math.ceil(this.along / Math.max(1, Math.min(h.seg, h.d + h.untilLoopEnd) - outPart))); }
+      else if (h.d < outPart + hf) n = 0;
+      else { home = true; n = Math.max(v.procPass, Math.ceil(this.along / Math.max(1, Math.min(h.seg, h.d + h.untilLoopEnd) - outPart - hf))); }
     } else { home = lf >= this.outFrames; n = home ? this.passBack : v.procPass; }
     for (var i = 0; i < n; i++) this.oddEven(home);
     this.procF = f;
@@ -319,9 +342,13 @@
     this.findSpans(null, this.openAt(lf)); this.initState(); this.bitonic(this.span, Math.min(v.sortMax, this.along), this.geom.desc);
     var n = this.W * this.H, gl = this.gl;
     this.run('inv', this.doh, { uState: this.st }, null, function () { gl.drawArrays(gl.POINTS, 0, n); });
-    this.run('blendInit', this.st, { uDestOfHome: this.doh, uSrc: this.src }, function (gl, u) {
+    var tog = v.openHow && this.timeline ? 1 : 0, hp = tog ? DF.hitPhase(this.timeline[lf]) : { ph: 0, fall: 0, kind: 0 };
+    this.run('blendInit', this.st, { uDestOfHome: this.doh, uSrc: this.src, uEase: this.easeTex }, function (gl, u) {
       gl.uniform1i(u.uT, T); gl.uniform1i(u.uStag, Math.round(v.sweepStag * 4096 / 100));
+      gl.uniform1i(u.uTogether, tog); gl.uniform1i(u.uStagBy, v.stagBy || 0); gl.uniform1i(u.uExit, v.stagExit || 0);
+      gl.uniform1i(u.uPh, hp.ph); gl.uniform1i(u.uFall, hp.fall); gl.uniform1i(u.uKind, hp.kind);
     });
+    this.blend = { tog: tog, ph: hp.ph, fall: hp.fall, kind: hp.kind, T: T };   // for the self-test's CPU sweep
     this.bitonic(this.whole, this.along, false);      // interpolated positions: always ascending
   };
 

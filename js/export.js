@@ -25,6 +25,14 @@
     throw new Error('This browser cannot encode ' + cfg.codec + ' at ' + cfg.width + 'x' + cfg.height + '.');
   }
 
+  // AAC in, or no sound track at all: a browser without an AAC encoder (some iPhone Safari versions) still gets the video
+  async function aacSupported() {
+    if (!('AudioEncoder' in window)) return false;
+    try { return !!(await AudioEncoder.isConfigSupported({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: 192000 })).supported; }
+    catch (e) { return false; }
+  }
+  DF.aacSupported = aacSupported;
+
   async function encodeAudio(buf, muxer, bitrate) {
     var failure = null;
     var enc = new AudioEncoder({
@@ -60,11 +68,12 @@
       codec: avcCodec(o.width, o.height, o.fps), width: o.width, height: o.height, framerate: o.fps,
       bitrate: o.videoBitrate || 24e6, bitrateMode: 'variable', latencyMode: 'quality', avc: { format: 'avc' }
     });
+    var withAudio = !!o.audio && await aacSupported();
     var target = new Mp4Muxer.ArrayBufferTarget();
     var muxer = new Mp4Muxer.Muxer({
       target: target,
       video: { codec: 'avc', width: o.width, height: o.height, frameRate: o.fps },
-      audio: o.audio ? { codec: 'aac', numberOfChannels: 2, sampleRate: 48000 } : undefined,
+      audio: withAudio ? { codec: 'aac', numberOfChannels: 2, sampleRate: 48000 } : undefined,
       fastStart: 'in-memory',
       firstTimestampBehavior: 'offset'
     });
@@ -88,7 +97,7 @@
     await venc.flush();
     venc.close();
     if (failure) throw failure;
-    if (o.audio) {
+    if (withAudio) {
       // audio may be a function: it is rendered after the frames, so it can use what the frames produced (pixel rows)
       var buf = typeof o.audio === 'function' ? await o.audio() : o.audio;
       await encodeAudio(buf, muxer, o.audioBitrate);
@@ -96,7 +105,7 @@
     muxer.finalize();
     var blob = new Blob([target.buffer], { type: 'video/mp4' });
     var info = { codec: cfg.codec, hw: cfg.hardwareAcceleration, frames: o.frames, chunks: chunks, keyframes: keys,
-                 fps: o.fps, width: o.width, height: o.height, bytes: blob.size,
+                 fps: o.fps, width: o.width, height: o.height, bytes: blob.size, audio: withAudio ? 'aac' : (o.audio ? 'none (no AAC encoder here)' : 'none'),
                  mbps: +(blob.size * 8 / (o.frames / o.fps) / 1e6).toFixed(2), ms: Math.round(performance.now() - t0) };
     if (o.onProgress) o.onProgress(1);
     return { blob: blob, info: info };

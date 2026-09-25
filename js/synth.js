@@ -81,14 +81,14 @@
   // schedule every step whose time falls in [from, to). t0 = audio time of frame 0. onStep(step, frame) lets the
   // caller read the picture (pixel row) just before a note.
   Synth.prototype.schedule = function (piece, t0, from, to, onStep) {
-    var v = piece.v, stepDur = v.step / 60, seq = piece.seq || { hits: 0, notes: [] }, L = DF.loopFrames(v);
+    var v = piece.v, stepDur = v.step / 60, seq = piece.seq || { hits: 0, notes: [] }, L = DF.loopFrames(v), vis = DF.soundedHits(piece);
     var first = Math.max(0, Math.ceil((from - t0) / stepDur - 1e-9)), last = Math.floor((to - t0) / stepDur - 1e-9);
     for (var s = first; s <= last; s++) {
       var t = t0 + s * stepDur; if (t < from - 1e-6 || t >= to) continue;
       var k = s % 16, fr = s * v.step;
       var ve = DF.effective(piece, fr);
       if (onStep) onStep(k, fr);
-      if (seq.hits & (1 << k)) this.hit(t, Math.max(0.08, v.hitLen * stepDur), ve);
+      if ((seq.hits & (1 << k)) && (!vis || vis[fr % L])) this.hit(t, Math.max(0.08, v.hitLen * stepDur), ve);
       var n = seq.notes && seq.notes[k];
       if (n) this.note(t, noteHz(ve, n), stepDur * 1.5, ve);
     }
